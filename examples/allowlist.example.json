@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "suppressions": [
+    {
+      "rule_id": "untrusted-pull-request-target",
+      "path": ".github/workflows/release.yml",
+      "justification": "Release workflow uses read-only permissions and never checks out fork-controlled code.",
+      "expires_on": "2026-12-31"
+    },
+    {
+      "rule_id": "unpinned-third-party-action",
+      "path": ".github/workflows/nightly.yml",
+      "justification": "Pinned digest migration is tracked separately and scheduled for the next platform-hardening sweep."
+    }
+  ]
+}
