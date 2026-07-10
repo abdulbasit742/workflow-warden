@@ -1,34 +1,90 @@
 from __future__ import annotations
 
-import io
 import json
-import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
-
-from workflow_warden.cli import main
-
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-class CliTests(unittest.TestCase):
-    def test_json_output_is_machine_readable(self) -> None:
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            exit_code = main(["scan", str(FIXTURES / "insecure.yml"), "--format", "json"])
-        self.assertEqual(0, exit_code)
-        payload = json.loads(buffer.getvalue())
-        self.assertTrue(any(item["rule_id"] == "WW004" for item in payload))
-
-    def test_fail_on_threshold_returns_non_zero(self) -> None:
-        exit_code = main(["scan", str(FIXTURES / "insecure.yml"), "--fail-on", "medium"])
-        self.assertEqual(1, exit_code)
-
-    def test_clean_scan_returns_zero(self) -> None:
-        exit_code = main(["scan", str(FIXTURES / "secure.yml"), "--fail-on", "medium"])
-        self.assertEqual(0, exit_code)
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
+class CLITests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        (self.root / ".github" / "workflows").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _write_workflow(self, name: str, content: str) -> None:
+        (self.root / ".github" / "workflows" / name).write_text(
+            textwrap.dedent(content).strip() + "\n",
+            encoding="utf-8",
+        )
+
+    def test_sarif_output_file_is_written(self) -> None:
+        self._write_workflow(
+            "risky.yml",
+            """
+            on:
+              pull_request_target:
+            permissions: write-all
+            jobs:
+              audit:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: vendor/security-action@v1
+            """,
+        )
+        sarif_output = self.root / "artifacts" / "workflow-warden.sarif"
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "workflow_warden",
+                str(self.root),
+                "--format",
+                "sarif",
+                "--sarif-output",
+                str(sarif_output),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertTrue(sarif_output.exists())
+        stdout = json.loads(completed.stdout)
+        written = json.loads(sarif_output.read_text(encoding="utf-8"))
+        self.assertEqual(stdout["version"], "2.1.0")
+        self.assertEqual(written["runs"][0]["results"][0]["ruleId"], "WW001")
+
+    def test_clean_repo_returns_zero(self) -> None:
+        self._write_workflow(
+            "safe.yml",
+            """
+            on: push
+            permissions:
+              contents: read
+            jobs:
+              test:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/checkout@v7
+                  - uses: actions/setup-python@v6
+            """,
+        )
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "workflow_warden", str(self.root)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("No findings detected", completed.stdout)

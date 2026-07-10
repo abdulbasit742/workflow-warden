@@ -1,23 +1,10 @@
 # Skill Registry
 
-Prioritized by security first, then adoption impact.
+| ID | Title | Priority | Status | Notes |
+| --- | --- | --- | --- | --- |
+| SKILL-001 | SARIF export + GitHub code scanning integration | High | Done | Added `--format sarif`, `--sarif-output`, SARIF rule metadata, regression tests, and a least-privilege upload workflow. |
+| SKILL-002 | Allowlist and suppressions | High | Ready | Add per-rule and per-path suppressions so teams can adopt the scanner without muting real risk. |
+| SKILL-003 | Reusable workflow and composite action coverage | Medium | Ready | Expand detection beyond flat workflow files into `workflow_call` chains and local composite actions. |
+| SKILL-004 | Remediation guidance and optional autofix hints | Medium | Backlog | Add prescriptive fix snippets for common findings while keeping dry-run defaults. |
 
-## Ready
-
-1. **SKILL-001 — SARIF export**
-   - Add GitHub code scanning compatible output so findings can surface natively in pull requests.
-   - Acceptance: `--format sarif` emits valid SARIF 2.1.0 and a fixture test validates core schema fields.
-
-2. **SKILL-002 — Allowlist and suppression support**
-   - Let teams suppress known acceptable findings by rule ID, file path, or inline annotation.
-   - Acceptance: scanner loads a suppression file, excludes matching findings, and records suppressed counts.
-
-3. **SKILL-003 — Policy packs**
-   - Add opinionated profiles (`strict`, `balanced`, `legacy`) that map severities and enabled rules.
-   - Acceptance: CLI supports `--policy`, and tests verify rule enablement and fail thresholds.
-
-## Later
-
-4. **SKILL-004 — Reusable workflow analysis**
-5. **SKILL-005 — Autofix suggestions for permissions hardening**
-6. **SKILL-006 — Markdown report generation for pull request comments**
+**Next recommended move:** SKILL-002. It reduces adoption friction without weakening the current high-signal rule set.
