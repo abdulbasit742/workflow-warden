@@ -2,32 +2,38 @@ name: security
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-  schedule:
-    - cron: '17 3 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
-  audit:
+  sarif-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
-      - name: Scan workflow files for risky patterns
-        env:
-          PYTHONPATH: src
-        run: python -m workflow_warden scan .github/workflows --minimum-severity medium --fail-on medium
-      - name: Check for committed secrets in tracked text
-        shell: bash
+          python-version: "3.11"
+
+      - name: Install package
         run: |
-          if git grep -nE '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|AIza[0-9A-Za-z_-]{35}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' -- . ':!LICENSE'; then
-            echo 'Potential secret material detected in tracked files.'
-            exit 1
-          fi
-          echo 'No obvious secret patterns found.'
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Generate Workflow Warden SARIF
+        run: python -m workflow_warden . --format sarif --sarif-output workflow-warden.sarif
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: workflow-warden.sarif

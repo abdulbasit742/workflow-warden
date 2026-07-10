@@ -2,50 +2,90 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict
+from pathlib import Path
+import sys
+from typing import Sequence
 
-from .scanner import SEVERITY_ORDER, format_text, scan_path
+from .sarif import findings_to_sarif
+from .scanner import Finding, scan_repository, serialize_findings, summarize_findings
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Scan GitHub Actions workflows for security risks.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    scan_parser = subparsers.add_parser("scan", help="Scan a repository or workflow directory")
-    scan_parser.add_argument("path", nargs="?", default=".", help="Repository root, workflow directory, or workflow file")
-    scan_parser.add_argument("--format", choices=("text", "json"), default="text", dest="output_format")
-    scan_parser.add_argument(
-        "--minimum-severity",
-        choices=tuple(SEVERITY_ORDER.keys()),
-        default="low",
-        help="Only show findings at or above this severity",
+    parser = argparse.ArgumentParser(
+        prog="workflow-warden",
+        description="Scan GitHub Actions workflows for risky patterns.",
     )
-    scan_parser.add_argument(
-        "--fail-on",
-        choices=tuple(SEVERITY_ORDER.keys()),
-        help="Exit non-zero when a finding at or above this severity is present",
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repository root to scan (defaults to current directory).",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("text", "json", "sarif"),
+        default="text",
+        help="Output format.",
+    )
+    parser.add_argument(
+        "--sarif-output",
+        help="Optional path to also write SARIF output.",
     )
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def _render_text(findings: list[Finding], root: Path) -> str:
+    if not findings:
+        return f"No findings detected in {root}."
+
+    counts = summarize_findings(findings)
+    lines = [
+        f"Detected {len(findings)} workflow risk(s) in {root}.",
+        (
+            "Severity counts: "
+            f"high={counts['high']}, medium={counts['medium']}, low={counts['low']}"
+        ),
+    ]
+    for finding in findings:
+        location = f"{finding.path}:{finding.line}"
+        lines.append(
+            f"- [{finding.severity.upper()}] {finding.rule_id} {location} — {finding.message}"
+        )
+    return "\n".join(lines)
+
+
+def _write_sarif_output(path: str, findings: list[Finding]) -> None:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(findings_to_sarif(findings), indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    root = Path(args.path)
 
-    if args.command != "scan":
-        parser.error("Unsupported command")
+    try:
+        findings = scan_repository(root)
+    except FileNotFoundError:
+        print(f"Repository path does not exist: {root}", file=sys.stderr)
+        return 2
 
-    findings = scan_path(args.path, minimum_severity=args.minimum_severity)
+    if args.sarif_output:
+        _write_sarif_output(args.sarif_output, findings)
 
-    if args.output_format == "json":
-        print(json.dumps([asdict(item) for item in findings], indent=2))
+    if args.format == "json":
+        print(json.dumps(serialize_findings(findings), indent=2))
+    elif args.format == "sarif":
+        print(json.dumps(findings_to_sarif(findings), indent=2))
     else:
-        print(format_text(findings))
+        print(_render_text(findings, root))
 
-    if args.fail_on and any(SEVERITY_ORDER[item.severity] >= SEVERITY_ORDER[args.fail_on] for item in findings):
-        return 1
-    return 0
+    return 1 if findings else 0
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())

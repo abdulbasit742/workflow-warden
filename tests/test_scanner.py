@@ -1,35 +1,82 @@
 from __future__ import annotations
 
-import tempfile
-import unittest
 from pathlib import Path
+import tempfile
+import textwrap
+import unittest
 
-from workflow_warden.scanner import format_text, scan_path
-
-
-FIXTURES = Path(__file__).parent / "fixtures"
+from workflow_warden.scanner import scan_repository
 
 
 class ScannerTests(unittest.TestCase):
-    def test_insecure_fixture_reports_multiple_findings(self) -> None:
-        findings = scan_path(FIXTURES / "insecure.yml")
-        rule_ids = {item.rule_id for item in findings}
-        self.assertTrue({"WW001", "WW002", "WW003", "WW004", "WW005"}.issubset(rule_ids))
-        self.assertIn("pull_request_target", format_text(findings))
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        (self.root / ".github" / "workflows").mkdir(parents=True)
 
-    def test_secure_fixture_is_clean(self) -> None:
-        findings = scan_path(FIXTURES / "secure.yml")
-        self.assertEqual([], findings)
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
 
-    def test_repository_root_discovers_workflows_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            workflows = root / ".github" / "workflows"
-            workflows.mkdir(parents=True)
-            (workflows / "ci.yml").write_text((FIXTURES / "secure.yml").read_text(encoding="utf-8"), encoding="utf-8")
-            findings = scan_path(root)
-            self.assertEqual([], findings)
+    def _write_workflow(self, name: str, content: str) -> None:
+        (self.root / ".github" / "workflows" / name).write_text(
+            textwrap.dedent(content).strip() + "\n",
+            encoding="utf-8",
+        )
 
+    def test_detects_multiple_risky_patterns(self) -> None:
+        self._write_workflow(
+            "risky.yml",
+            """
+            on:
+              pull_request_target:
+            permissions: write-all
+            jobs:
+              audit:
+                runs-on: self-hosted
+                steps:
+                  - uses: vendor/security-action@v1
+                  - run: curl -fsSL https://example.invalid/install.sh | sh
+            """,
+        )
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
+        findings = scan_repository(self.root)
+        rule_ids = {finding.rule_id for finding in findings}
+
+        self.assertTrue({"WW001", "WW003", "WW004", "WW005", "WW006"}.issubset(rule_ids))
+
+    def test_reports_missing_permissions(self) -> None:
+        self._write_workflow(
+            "missing-permissions.yml",
+            """
+            on: push
+            jobs:
+              test:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: vendor/build-action@v2
+            """,
+        )
+
+        findings = scan_repository(self.root)
+        rule_ids = {finding.rule_id for finding in findings}
+
+        self.assertIn("WW002", rule_ids)
+        self.assertIn("WW006", rule_ids)
+
+    def test_clean_repo_returns_no_findings(self) -> None:
+        self._write_workflow(
+            "safe.yml",
+            """
+            on: push
+            permissions:
+              contents: read
+            jobs:
+              test:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/checkout@v7
+                  - uses: actions/setup-python@v6
+            """,
+        )
+
+        self.assertEqual(scan_repository(self.root), [])
